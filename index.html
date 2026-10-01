@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Garra de Águia – Flash Cards</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Spectral:ital,wght@0,400;0,600;0,800;1,400&display=swap">
+<script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
 <style>
 :root{--ink:#120d0b;--panel:#1d1512;--line:#4a3426;--red:#b3261e;--red2:#d8392c;--gold:#e0b45a;--paper:#f3e6cf;--mute:#a8957b;--ok:#3f9b5f;
 box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -114,7 +115,7 @@ footer{text-align:center;color:var(--mute);font-size:14px;padding:0 4vw 14px}
 </main>
 <main id="mCtl" class="hidden"><div class="ctl" id="ctl"></div></main>
 <div class="rem hidden" id="rempanel"><b>Controle pelo celular</b>
-<p>No celular, abra este mesmo link com a sua conta do claude.ai, toque em “Controle remoto” e depois em “Usar este aparelho como controle”. Digite o código:</p>
+<p>No celular, acesse este mesmo site, toque em “Controle remoto” e depois em “Usar este aparelho como controle”. Digite o código:</p>
 <div class="code" id="rcode"></div><div class="st" id="rst">Conectando…</div>
 <button class="chip" id="asctl">Usar este aparelho como controle</button></div>
 <footer id="foot">Espaço vira a carta · ← → navegam · S embaralha · D troca o idioma da frente</footer>
@@ -213,15 +214,14 @@ document.addEventListener('keydown',e=>{
 });
 build(false);
 
-/* controle remoto (sala em tempo real) */
+/* controle remoto (sala em tempo real) via PeerJS */
 const WL=['flip','next','prev','shuf','dir','filt','mode','pick','qnext','qreset'];
-let R=null,CR=null,ST=null,last='',tm=0,ctlCode='';
+let peer=null,conns=[],connCtl=null,ST=null,last='',tm=0,ctlCode='';
 try{ctlCode=localStorage.getItem('gcode2')||''}catch(e){}
 let code='';try{code=localStorage.getItem('gcode')||''}catch(e){}
 if(!code){code=String(1000+Math.floor(Math.random()*9000));try{localStorage.setItem('gcode',code)}catch(e){}}
 $('#rcode').textContent=code;
 const esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-async function joinRoom(c){try{const r=window.claude&&await claude.use('room');return r?await r.join('garra-'+c):null}catch(e){return null}}
 function act(a,v){
   if(!WL.includes(a))return;
   const quiz=!$('#mQuiz').classList.contains('hidden');
@@ -240,18 +240,36 @@ function snap(){
   else if(qi>=Q.length)Object.assign(s,{done:1,score,qn:Q.length});
   else Object.assign(s,{qi,qn:Q.length,q:Q[qi].q,o:Q[qi].o,a:Q[qi].a,ans:answered});
   return s}
-function pub(){const s=snap(),j=JSON.stringify(s);if(j!==last){last=j;R.presence({st:s})}}
-async function startDisplay(){
-  R=await joinRoom(code);const st=$('#rst');
-  if(!R){st.textContent='Controle remoto indisponível aqui.';return}
-  R.on('cmd',m=>{if(!m.isMe&&m.data)act(m.data.a,m.data.v)});
-  R.onPeers(ch=>{const n=ch.peers.filter(p=>!p.isMe).length;st.textContent=n?'Celular conectado ✓':'Aguardando o celular…';st.classList.toggle('on',n>0)});
+function pub(){
+  const s=snap(),j=JSON.stringify(s);
+  if(j!==last){
+    last=j;
+    conns.forEach(c=>c.send({type:'st',st:s}));
+  }
+}
+function startDisplay(){
+  const st=$('#rst');
+  peer=new Peer('garra-'+code);
+  peer.on('open',()=>st.textContent='Aguardando o celular…');
+  peer.on('connection',c=>{
+    conns.push(c);
+    c.on('data',d=>{if(d.type==='cmd')act(d.a,d.v)});
+    c.on('close',()=>{
+      conns=conns.filter(x=>x!==c);
+      st.textContent=conns.length?'Celular conectado ✓':'Aguardando o celular…';
+      st.classList.toggle('on',conns.length>0);
+    });
+    st.textContent='Celular conectado ✓';
+    st.classList.add('on');
+    last='';pub();
+  });
+  peer.on('error',()=>st.textContent='Erro de conexão. Recarregue a página.');
   tm=setInterval(pub,500);
 }
 $('#tRem').onclick=()=>{const h=$('#rempanel').classList.toggle('hidden');$('#tRem').setAttribute('aria-pressed',!h)};
 function drawCtl(){
   const el=$('#ctl'),s=ST;
-  if(!CR){el.innerHTML=`<div class="peek"><div class="pk1">Controle remoto</div><div class="st">Digite o código que aparece no telão.</div></div><input id="ci" inputmode="numeric" maxlength="4" placeholder="0000" value="${esc(ctlCode)}"><button class="cb big" id="cgo">Conectar</button><div class="st" id="cmsg"></div>`;$('#cgo').onclick=connectCtl;return}
+  if(!connCtl){el.innerHTML=`<div class="peek"><div class="pk1">Controle remoto</div><div class="st">Digite o código que aparece no telão.</div></div><input id="ci" inputmode="numeric" maxlength="4" placeholder="0000" value="${esc(ctlCode)}"><button class="cb big" id="cgo">Conectar</button><div class="st" id="cmsg"></div>`;$('#cgo').onclick=connectCtl;return}
   if(!s){el.innerHTML='<div class="st">Conectado à sala. Aguardando o telão…</div>';return}
   let h=`<div class="row"><button class="cb ${s.mode==='c'?'on':''}" data-a="mode" data-v="c">Flash cards</button><button class="cb ${s.mode==='q'?'on':''}" data-a="mode" data-v="q">Quiz</button></div>`;
   if(s.mode==='c'){
@@ -264,21 +282,29 @@ function drawCtl(){
   else{h+=`<div class="peek"><div class="st">Pergunta ${esc(s.qi+1)} de ${esc(s.qn)} (★ = resposta certa, só você vê)</div>${esc(s.q)}</div>`+(s.o||[]).map((t,k)=>`<button class="cb opt2 ${s.ans&&k===s.a?'ok':''}" data-a="pick" data-v="${k}" ${s.ans?'disabled':''}><b>${'ABC'[k]}</b> ${esc(t)}${!s.ans&&k===s.a?' ★':''}</button>`).join('')+`<button class="cb big" data-a="qnext" ${s.ans?'':'disabled'}>Próxima</button><button class="cb" data-a="qreset">Reiniciar quiz</button>`}
   el.innerHTML=h;
 }
-async function connectCtl(){
+function connectCtl(){
   ctlCode=$('#ci').value.trim();const m=$('#cmsg');m.textContent='Conectando…';
-  CR=await joinRoom(ctlCode);
-  if(!CR){m.textContent='Não consegui conectar. Confira o código e use a mesma conta do claude.ai.';return}
-  try{localStorage.setItem('gcode2',ctlCode)}catch(e){}
-  CR.onPeers(ch=>{const d=ch.peers.find(p=>!p.isMe&&p.presence&&p.presence.st);ST=d?d.presence.st:null;drawCtl()});
-  drawCtl();
+  if(peer)peer.destroy();
+  peer=new Peer();
+  peer.on('open',()=>{
+    connCtl=peer.connect('garra-'+ctlCode);
+    connCtl.on('open',()=>{
+      m.textContent='';
+      try{localStorage.setItem('gcode2',ctlCode)}catch(e){}
+      drawCtl();
+    });
+    connCtl.on('data',d=>{if(d.type==='st'){ST=d.st;drawCtl()}});
+    connCtl.on('close',()=>{connCtl=null;ST=null;drawCtl()});
+  });
+  peer.on('error',()=>m.textContent='Não consegui conectar. Verifique o código.');
 }
 function startCtl(){
-  clearInterval(tm);if(R){R.leave();R=null}
+  clearInterval(tm);if(peer){peer.destroy();peer=null}
   ['#mCards','#mQuiz','#foot','nav','#rempanel'].forEach(q=>$(q).classList.add('hidden'));
   $('#mCtl').classList.remove('hidden');drawCtl();
 }
-$('#ctl').onclick=e=>{const b=e.target.closest('[data-a]');if(!b||!CR||b.disabled)return;
-  const v=b.dataset.v;CR.emit('cmd',{a:b.dataset.a,v:v==null?undefined:(isNaN(v)?v:+v)})};
+$('#ctl').onclick=e=>{const b=e.target.closest('[data-a]');if(!b||!connCtl||b.disabled)return;
+  const v=b.dataset.v;connCtl.send({type:'cmd',a:b.dataset.a,v:v==null?undefined:(isNaN(v)?v:+v)})};
 $('#asctl').onclick=()=>{location.hash='controle';startCtl()};
 if(location.hash==='#controle')startCtl();else startDisplay();
 </script>
